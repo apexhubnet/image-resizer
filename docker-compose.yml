@@ -1,0 +1,25 @@
+services:
+  image-resizer:
+    build: .
+    image: kirillkrasin/image-resizer:1.0
+    container_name: image-resizer
+    hostname: image-resizer
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - apexhub_net
+volumes:
+  image-cache:
+
+networks:
+  apexhub_net:
+    external: true
+    driver: bridge
