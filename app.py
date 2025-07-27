@@ -6,10 +6,11 @@ from flask import Flask, request, jsonify
 from PIL import Image
 import boto3
 from botocore.client import Config
+from functools import wraps
 
 app = Flask(__name__)
 
-# Конфигурация S3 из переменных окружения
+# Конфигурация из переменных окружения
 S3_BUCKET = os.getenv('S3_BUCKET')
 S3_ENDPOINT = os.getenv('S3_ENDPOINT')
 S3_REGION = os.getenv('S3_REGION', 'ru-1')
@@ -17,6 +18,8 @@ S3_ACCESS_KEY = os.getenv('S3_ACCESS_KEY')
 S3_SECRET_KEY = os.getenv('S3_SECRET_KEY')
 WEBP_QUALITY = int(os.getenv('WEBP_QUALITY', 85))
 WEBP_METHOD = int(os.getenv('WEBP_METHOD', 6))
+API_TOKEN = os.getenv('API_TOKEN')  # Токен для аутентификации
+CORS_ORIGIN = os.getenv('CORS_ORIGIN', '*')  # Разрешенные домены
 
 # Инициализация клиента S3 для TimeWeb Cloud
 s3 = boto3.client(
@@ -27,6 +30,34 @@ s3 = boto3.client(
     aws_secret_access_key=S3_SECRET_KEY,
     config=Config(signature_version='s3v4')
 )
+
+def token_required(f):
+    """Декоратор для проверки токена аутентификации"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Пропускаем OPTIONS запросы для CORS
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+            
+        # Проверяем наличие и корректность токена
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({"error": "Missing Authorization header"}), 401
+            
+        token = auth_header.replace("Bearer ", "").strip()
+        if token != API_TOKEN:
+            return jsonify({"error": "Invalid token"}), 403
+            
+        return f(*args, **kwargs)
+    return decorated
+
+@app.after_request
+def add_cors_headers(response):
+    """Добавляем CORS заголовки ко всем ответам"""
+    response.headers['Access-Control-Allow-Origin'] = CORS_ORIGIN
+    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
+    response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    return response
 
 def generate_hash():
     """Генерация уникального 24-символьного хеша"""
@@ -170,42 +201,52 @@ SIZES_CONFIG = {
     }
 }
 
-@app.route('/64', methods=['POST'])
+@app.route('/64', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_64():
     return handle_upload('64')
 
-@app.route('/80', methods=['POST'])
+@app.route('/80', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_80():
     return handle_upload('80')
 
-@app.route('/100', methods=['POST'])
+@app.route('/100', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_100():
     return handle_upload('100')
 
-@app.route('/158', methods=['POST'])
+@app.route('/158', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_158():
     return handle_upload('158')
 
-@app.route('/400', methods=['POST'])
+@app.route('/400', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_400():
     return handle_upload('400')
 
-@app.route('/600', methods=['POST'])
+@app.route('/600', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_600():
     return handle_upload('600')
 
-@app.route('/upload', methods=['POST'])
+@app.route('/upload', methods=['POST', 'OPTIONS'])
+@token_required
 def upload_original():
     """Эндпоинт для загрузки оригинального изображения без изменения размеров"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
-    
+        
     file = request.files['file']
     unique_hash, error = process_original_upload(file)
     
     if error:
         return jsonify({"error": error}), 400
-    
+        
     return jsonify({
         "hash": unique_hash,
         "endpoint": "original",
@@ -213,20 +254,23 @@ def upload_original():
     }), 200
 
 def handle_upload(endpoint_type):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
-    
+        
     file = request.files['file']
     sizes = SIZES_CONFIG.get(endpoint_type, {})
     
     if not sizes:
         return jsonify({"error": "Invalid endpoint configuration"}), 500
-    
+        
     unique_hash, error = process_upload(file, sizes)
     
     if error:
         return jsonify({"error": error}), 400
-    
+        
     return jsonify({
         "hash": unique_hash,
         "endpoint": endpoint_type,
